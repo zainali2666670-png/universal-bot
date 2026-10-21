@@ -1,0 +1,139 @@
+import os
+import requests
+import logging
+from flask import Flask, request, jsonify
+import google.generativeai as genai
+
+# Enable Logging for Debugging
+logging.basicConfig(level=logging.INFO)
+
+app = Flask(__name__)
+
+# --- CONFIGURED API KEYS & CREDENTIALS ---
+GENAI_API_KEY = "AQ.Ab8RN6J_JKOXAfUdFA8WZLhzc_xFSBku_uJ27tpnDbyqYeNm9w"
+ULTRAMSG_INSTANCE_ID = "instance194858"
+ULTRAMSG_TOKEN = "erikl8lehfxzyl7x"
+# ----------------------------------------
+
+genai.configure(api_key=GENAI_API_KEY)
+
+# Global Business Mode
+CURRENT_MODE = "MOBILE"
+
+# Multi-Industry Stock & Service Inventory
+INVENTORY_DATA = """
+Category  | Item Name                | Details / Specs                          | Price (USD/PKR) | Stock / Status
+-------------------------------------------------------------------------------------------------------------
+Mobile    | iPhone 15 Pro Max        | 256GB, Natural Titanium (Factory Unlocked)| $1,199 / 285k   | 4 In Stock
+Mobile    | Samsung S24 Ultra        | 512GB, Titanium Gray (Official Warranty)  | $1,299 / 390k   | 3 In Stock
+Accessory | 20W Anker Fast Charger   | Type-C Power Delivery Adapter            | $25 / 4,500     | 25 In Stock
+Accessory | AirPods Pro 2nd Gen      | Active Noise Cancellation                | $249 / 65k      | 12 In Stock
+
+Estate    | 5 Marla Plot             | DHA Phase 7, Prime Location              | $48,000         | Available
+Estate    | Luxury Modern Villa      | 5 Bedrooms, Swimming Pool, Smart Home    | $350,000        | Available
+Estate    | Commercial Space         | 1,200 Sq Ft, High Footfall Avenue        | $180,000        | Available
+
+Food      | Gourmet Burger Deal      | Beef Patty + Truffle Fries + Beverage    | $15             | Available
+Food      | Italian Pizza Meal       | 16-inch Pizza + Garlic Bread + Drink      | $25             | Available
+"""
+
+def build_system_prompt():
+    return f"""
+    You are an AI-powered All-in-One Sales Executive and Customer Care Automation Agent.
+    Your primary objective is to provide accurate product details from the inventory and proactively CLOSE SALES.
+
+    --- LIVE BUSINESS INVENTORY & PRICING TABLE ---
+    {INVENTORY_DATA}
+    --------------------------------------------------
+
+    Active Operating Mode: {CURRENT_MODE}
+
+    STRICT GUIDELINES:
+    1. Respond ONLY in clear, concise, and highly professional English.
+    2. Keep replies extremely short and direct to ensure zero delay in conversation.
+    3. Refer to the inventory table above to provide exact pricing, specs, and availability.
+    4. When a customer shows buying intent, gather details to close the deal: Full Name, Delivery Address, Quantity.
+    """
+
+def ask_gemini(user_message):
+    """Lightning-fast Gemini call optimized for speed."""
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        prompt = f"{build_system_prompt()}\n\nCustomer Message: {user_message}"
+        
+        response = model.generate_content(
+            prompt,
+            generation_config={"max_output_tokens": 150, "temperature": 0.3}
+        )
+        
+        if response and hasattr(response, 'text') and response.text:
+            return response.text.strip()
+        else:
+            return "Hello! How can I assist you with our inventory today?"
+            
+    except Exception as e:
+        logging.error(f"Error querying Gemini API: {e}")
+        return "Hello! Please let me know how I can help you."
+
+def send_whatsapp_msg(to_number, message):
+    """Send message via UltraMsg with short timeout to prevent blocking."""
+    try:
+        url = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE_ID}/messages/chat"
+        payload = {
+            "token": ULTRAMSG_TOKEN,
+            "to": to_number,
+            "body": message
+        }
+        headers = {'content-type': 'application/x-www-form-urlencoded'}
+        requests.post(url, data=payload, headers=headers, timeout=5)
+    except Exception as e:
+        logging.error(f"Failed to send WhatsApp message: {e}")
+
+@app.route('/', methods=['GET'])
+def home():
+    return "✅ WhatsApp AI Server is active with Zero Delay!", 200
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    global CURRENT_MODE
+    try:
+        data = request.get_json(silent=True)
+        if not data or 'data' not in data:
+            return jsonify({"status": "ignored"}), 200
+
+        msg_data = data['data']
+        if 'body' not in msg_data or not msg_data['body']:
+            return jsonify({"status": "ignored"}), 200
+
+        incoming_msg = str(msg_data['body']).strip()
+        from_number = msg_data.get('from', '')
+
+        if not incoming_msg or not from_number:
+            return jsonify({"status": "ignored"}), 200
+
+        # Instant Mode Switch Commands
+        cmd = incoming_msg.lower()
+        if cmd == "!mode mobile":
+            CURRENT_MODE = "MOBILE (Electronics & Retail Store)"
+            send_whatsapp_msg(from_number, "✅ Mode switched to: Retail & Mobile Shop")
+            return jsonify({"status": "success"}), 200
+        elif cmd == "!mode estate":
+            CURRENT_MODE = "ESTATE (Real Estate Agency)"
+            send_whatsapp_msg(from_number, "✅ Mode switched to: Real Estate Agency")
+            return jsonify({"status": "success"}), 200
+        elif cmd == "!mode food":
+            CURRENT_MODE = "FOOD (Restaurant & Delivery)"
+            send_whatsapp_msg(from_number, "✅ Mode switched to: Food & Restaurant Service")
+            return jsonify({"status": "success"}), 200
+
+        # Process AI Reply
+        ai_reply = ask_gemini(incoming_msg)
+        send_whatsapp_msg(from_number, ai_reply)
+
+    except Exception as e:
+        logging.error(f"Webhook Error: {e}")
+
+    return jsonify({"status": "success"}), 200
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
